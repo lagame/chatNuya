@@ -1,9 +1,10 @@
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:chat_app/models/user.dart';
+import 'package:chat_app/config/app_config.dart';
 
 class ApiService {
-  static const String baseUrl = 'http://localhost:3001';
+  static const String baseUrl = AppConfig.apiBaseUrl;
   static const String apiBaseUrl = '$baseUrl';
 
   // Register user

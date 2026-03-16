@@ -1,8 +1,9 @@
 import 'package:socket_io_client/socket_io_client.dart' as IO;
 import 'package:chat_app/models/message.dart';
+import 'package:chat_app/config/app_config.dart';
 
 class SocketService {
-  static const String socketUrl = 'http://localhost:3001';
+  static const String socketUrl = AppConfig.socketUrl;
   late IO.Socket socket;
   int? currentUserId;
 
