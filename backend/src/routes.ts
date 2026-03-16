@@ -56,7 +56,7 @@ router.post('/register', upload.single('avatar'), async (req: Request, res: Resp
 
     // Insert user into database
     const result = await runAsync(
-      `INSERT INTO users (username, email, password, birthDate, gender, avatarUrl, language) 
+      `INSERT INTO users (username, email, password, "birthDate", gender, "avatarUrl", language) 
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
       [
         username,
@@ -80,7 +80,7 @@ router.post('/register', upload.single('avatar'), async (req: Request, res: Resp
     });
   } catch (error: any) {
     console.error('Register error:', error);
-    if (error.message.includes('UNIQUE constraint failed')) {
+    if (error?.code === '23505') {
       return res.status(409).json({ error: 'Username or email already exists' });
     }
     res.status(500).json({ error: 'Registration failed' });
@@ -97,7 +97,7 @@ router.post('/login', async (req: Request, res: Response) => {
     }
 
     const user = await getAsync(
-      `SELECT id, username, email, birthDate, gender, avatarUrl, language
+      `SELECT id, username, email, "birthDate", gender, "avatarUrl", language
        FROM users
        WHERE (email = ? OR username = ?) AND password = ?`,
       [identifier, identifier, password]
@@ -118,7 +118,7 @@ router.post('/login', async (req: Request, res: Response) => {
 router.get('/users', async (req: Request, res: Response) => {
   try {
     const users = await allAsync(
-      `SELECT id, username, email, birthDate, gender, avatarUrl, language FROM users`
+      `SELECT id, username, email, "birthDate", gender, "avatarUrl", language FROM users`
     );
     res.json(users);
   } catch (error) {
@@ -132,7 +132,7 @@ router.get('/users/:id', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const user = await getAsync(
-      `SELECT id, username, email, birthDate, gender, avatarUrl, language FROM users WHERE id = ?`,
+      `SELECT id, username, email, "birthDate", gender, "avatarUrl", language FROM users WHERE id = ?`,
       [id]
     );
 
@@ -164,7 +164,7 @@ router.put('/users/:id/language', async (req: Request, res: Response) => {
     await runAsync(`UPDATE users SET language = ? WHERE id = ?`, [normalizedLanguage, id]);
 
     const user = await getAsync(
-      `SELECT id, username, email, birthDate, gender, avatarUrl, language FROM users WHERE id = ?`,
+      `SELECT id, username, email, "birthDate", gender, "avatarUrl", language FROM users WHERE id = ?`,
       [id]
     );
 
@@ -180,10 +180,10 @@ router.get('/contacts/:userId', async (req: Request, res: Response) => {
   try {
     const { userId } = req.params;
     const contacts = await allAsync(
-      `SELECT u.id, u.username, u.email, u.birthDate, u.gender, u.avatarUrl, u.language
+      `SELECT u.id, u.username, u.email, u."birthDate", u.gender, u."avatarUrl", u.language
        FROM contacts c
-       JOIN users u ON u.id = c.contactId
-       WHERE c.userId = ?
+       JOIN users u ON u.id = c."contactId"
+       WHERE c."userId" = ?
        ORDER BY u.username ASC`,
       [userId]
     );
@@ -209,7 +209,7 @@ router.post('/contacts', async (req: Request, res: Response) => {
     }
 
     const contact = await getAsync(
-      `SELECT id, username, email, birthDate, gender, avatarUrl, language
+      `SELECT id, username, email, "birthDate", gender, "avatarUrl", language
        FROM users WHERE lower(username) = ? OR lower(email) = ?`,
       [normalized, normalized]
     );
@@ -223,7 +223,7 @@ router.post('/contacts', async (req: Request, res: Response) => {
     }
 
     const existing = await getAsync(
-      `SELECT 1 FROM contacts WHERE userId = ? AND contactId = ?`,
+      `SELECT 1 FROM contacts WHERE "userId" = ? AND "contactId" = ?`,
       [userId, contact.id]
     );
 
@@ -231,11 +231,11 @@ router.post('/contacts', async (req: Request, res: Response) => {
       return res.status(409).json({ error: 'Contact already exists' });
     }
 
-    await runAsync(`INSERT INTO contacts (userId, contactId) VALUES (?, ?)`, [
+    await runAsync(`INSERT INTO contacts ("userId", "contactId") VALUES (?, ?)`, [
       userId,
       contact.id,
     ]);
-    await runAsync(`INSERT INTO contacts (userId, contactId) VALUES (?, ?)`, [
+    await runAsync(`INSERT INTO contacts ("userId", "contactId") VALUES (?, ?)`, [
       contact.id,
       userId,
     ]);

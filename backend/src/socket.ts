@@ -24,7 +24,7 @@ export function setupSocket(io: SocketIOServer) {
 
         // Save message to database
         await runAsync(
-          `INSERT INTO messages (senderId, receiverId, content) VALUES (?, ?, ?)`,
+          `INSERT INTO messages ("senderId", "receiverId", content) VALUES (?, ?, ?)`,
           [senderId, receiverId, content]
         );
 
@@ -59,8 +59,8 @@ export function setupSocket(io: SocketIOServer) {
       try {
         const messages = await allAsync(
           `SELECT * FROM messages 
-           WHERE (senderId = ? AND receiverId = ?) OR (senderId = ? AND receiverId = ?)
-           ORDER BY createdAt ASC`,
+           WHERE ("senderId" = ? AND "receiverId" = ?) OR ("senderId" = ? AND "receiverId" = ?)
+           ORDER BY "createdAt" ASC`,
           [data.userId1, data.userId2, data.userId2, data.userId1]
         );
         callback(messages);

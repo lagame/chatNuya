@@ -1,7 +1,7 @@
 {
   "name": "chat-app-backend",
   "version": "1.0.0",
-  "description": "Chat application backend with Node.js, TypeScript, and SQLite",
+  "description": "Chat application backend with Node.js, TypeScript, and PostgreSQL",
   "main": "dist/server.js",
   "scripts": {
     "start": "ts-node src/server.ts",
@@ -9,7 +9,11 @@
     "dev": "ts-node src/server.ts",
     "prod": "npm run build && node dist/server.js"
   },
-  "keywords": ["chat", "socket.io", "typescript"],
+  "keywords": [
+    "chat",
+    "socket.io",
+    "typescript"
+  ],
   "author": "",
   "license": "ISC",
   "dependencies": {
@@ -20,9 +24,12 @@
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
     "multer": "^2.1.1",
+    "pg": "^8.13.1",
     "socket.io": "^4.8.3",
-    "sqlite3": "^6.0.1",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.3"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.18.0"
   }
 }
