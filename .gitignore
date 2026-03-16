@@ -1,0 +1,43 @@
+# Backend
+backend/node_modules/
+backend/dist/
+backend/*.db
+backend/*.db-journal
+backend/uploads/
+backend/.env
+backend/.env.local
+backend/.DS_Store
+backend/*.log
+
+# Frontend
+frontend/build/
+frontend/.dart_tool/
+frontend/.flutter-plugins
+frontend/.flutter-plugins-dependencies
+frontend/.packages
+frontend/.pub-cache/
+frontend/.pub/
+frontend/pubspec.lock
+frontend/coverage/
+frontend/.vscode/
+frontend/.idea/
+frontend/*.iml
+frontend/ios/Pods/
+frontend/ios/Podfile.lock
+frontend/android/.gradle/
+frontend/android/local.properties
+frontend/windows/flutter/generated_plugins.cmake
+frontend/macos/Flutter/GeneratedPluginRegistrant.swift
+
+# General
+.DS_Store
+*.swp
+*.swo
+*~
+.env
+
+# Root workspace
+node_modules/
+.venv/
+uploads/
+.env.local
