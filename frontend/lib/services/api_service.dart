@@ -1,4 +1,5 @@
 import 'package:http/http.dart' as http;
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:chat_app/models/user.dart';
@@ -7,12 +8,103 @@ import 'package:chat_app/config/app_config.dart';
 class ApiService {
   static const String baseUrl = AppConfig.apiBaseUrl;
   static const String apiBaseUrl = '$baseUrl';
+  static const Duration _requestTimeout = Duration(seconds: 45);
+  static const int _maxAttempts = 3;
+  static const Set<int> _retryableStatusCodes = {
+    408,
+    429,
+    500,
+    502,
+    503,
+    504,
+  };
 
   static bool _isTransientNetworkError(Object error) {
     return error is SocketException ||
+        error is TimeoutException ||
         error is http.ClientException ||
-        error.toString().contains('connection abort') ||
-        error.toString().contains('Connection closed');
+        error.toString().toLowerCase().contains('connection abort') ||
+        error.toString().toLowerCase().contains('connection closed') ||
+        error.toString().toLowerCase().contains('timed out');
+  }
+
+  static Duration _retryDelay(int attempt) {
+    // Small exponential backoff to absorb Render wake-up latency.
+    return Duration(milliseconds: 1200 * attempt);
+  }
+
+  static String _extractErrorMessage(String body, String fallback) {
+    try {
+      final decoded = jsonDecode(body);
+      if (decoded is Map<String, dynamic> && decoded['error'] is String) {
+        return decoded['error'] as String;
+      }
+    } catch (_) {
+      // Non-JSON response body.
+    }
+    return fallback;
+  }
+
+  static Future<http.Response> _sendWithRetry({
+    required Future<http.Response> Function() send,
+    required String operation,
+  }) async {
+    for (var attempt = 1; attempt <= _maxAttempts; attempt++) {
+      try {
+        final response = await send().timeout(_requestTimeout);
+        final shouldRetry =
+            _retryableStatusCodes.contains(response.statusCode) &&
+            attempt < _maxAttempts;
+
+        if (shouldRetry) {
+          await Future.delayed(_retryDelay(attempt));
+          continue;
+        }
+
+        return response;
+      } catch (e) {
+        final canRetry = attempt < _maxAttempts && _isTransientNetworkError(e);
+        if (canRetry) {
+          await Future.delayed(_retryDelay(attempt));
+          continue;
+        }
+        throw Exception('$operation error: $e');
+      }
+    }
+
+    throw Exception('$operation failed');
+  }
+
+  static Future<({int statusCode, String body})> _sendMultipartWithRetry({
+    required Future<http.MultipartRequest> Function() buildRequest,
+    required String operation,
+  }) async {
+    for (var attempt = 1; attempt <= _maxAttempts; attempt++) {
+      try {
+        final request = await buildRequest();
+        final streamed = await request.send().timeout(_requestTimeout);
+        final body = await streamed.stream.bytesToString();
+        final shouldRetry =
+            _retryableStatusCodes.contains(streamed.statusCode) &&
+            attempt < _maxAttempts;
+
+        if (shouldRetry) {
+          await Future.delayed(_retryDelay(attempt));
+          continue;
+        }
+
+        return (statusCode: streamed.statusCode, body: body);
+      } catch (e) {
+        final canRetry = attempt < _maxAttempts && _isTransientNetworkError(e);
+        if (canRetry) {
+          await Future.delayed(_retryDelay(attempt));
+          continue;
+        }
+        throw Exception('$operation error: $e');
+      }
+    }
+
+    throw Exception('$operation failed');
   }
 
   // Register user
@@ -25,48 +117,40 @@ class ApiService {
     required String? avatarPath,
     String? language,
   }) async {
-    const maxAttempts = 2;
-
-    for (var attempt = 1; attempt <= maxAttempts; attempt++) {
-      try {
-        final request = http.MultipartRequest(
-          'POST',
-          Uri.parse('$apiBaseUrl/register'),
-        );
-
-        request.fields['username'] = username;
-        request.fields['email'] = email;
-        request.fields['password'] = password;
-        if (birthDate != null) request.fields['birthDate'] = birthDate;
-        if (gender != null) request.fields['gender'] = gender;
-        if (language != null) request.fields['language'] = language;
-
-        if (avatarPath != null && avatarPath.isNotEmpty) {
-          request.files.add(
-            await http.MultipartFile.fromPath('avatar', avatarPath),
+    try {
+      final result = await _sendMultipartWithRetry(
+        operation: 'Registration',
+        buildRequest: () async {
+          final request = http.MultipartRequest(
+            'POST',
+            Uri.parse('$apiBaseUrl/register'),
           );
-        }
 
-        final response =
-            await request.send().timeout(const Duration(seconds: 45));
-        final responseBody = await response.stream.bytesToString();
+          request.fields['username'] = username;
+          request.fields['email'] = email;
+          request.fields['password'] = password;
+          if (birthDate != null) request.fields['birthDate'] = birthDate;
+          if (gender != null) request.fields['gender'] = gender;
+          if (language != null) request.fields['language'] = language;
 
-        if (response.statusCode == 201) {
-          return User.fromJson(jsonDecode(responseBody));
-        }
+          if (avatarPath != null && avatarPath.isNotEmpty) {
+            request.files.add(
+              await http.MultipartFile.fromPath('avatar', avatarPath),
+            );
+          }
 
-        throw Exception(jsonDecode(responseBody)['error'] ?? 'Registration failed');
-      } catch (e) {
-        final canRetry = attempt < maxAttempts && _isTransientNetworkError(e);
-        if (canRetry) {
-          await Future.delayed(const Duration(milliseconds: 1200));
-          continue;
-        }
-        throw Exception('Registration error: $e');
+          return request;
+        },
+      );
+
+      if (result.statusCode == 201) {
+        return User.fromJson(jsonDecode(result.body));
       }
-    }
 
-    throw Exception('Registration failed');
+      throw Exception(_extractErrorMessage(result.body, 'Registration failed'));
+    } catch (e) {
+      throw Exception('Registration error: $e');
+    }
   }
 
   // Login user
@@ -75,19 +159,22 @@ class ApiService {
     required String password,
   }) async {
     try {
-      final response = await http.post(
-        Uri.parse('$apiBaseUrl/login'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'identifier': identifier,
-          'password': password,
-        }),
+      final response = await _sendWithRetry(
+        operation: 'Login',
+        send: () => http.post(
+          Uri.parse('$apiBaseUrl/login'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'identifier': identifier,
+            'password': password,
+          }),
+        ),
       );
 
       if (response.statusCode == 200) {
         return User.fromJson(jsonDecode(response.body));
       } else {
-        throw Exception(jsonDecode(response.body)['error'] ?? 'Login failed');
+        throw Exception(_extractErrorMessage(response.body, 'Login failed'));
       }
     } catch (e) {
       throw Exception('Login error: $e');
@@ -97,16 +184,19 @@ class ApiService {
   // Get all users
   static Future<List<User>> getAllUsers() async {
     try {
-      final response = await http.get(
-        Uri.parse('$apiBaseUrl/users'),
-        headers: {'Content-Type': 'application/json'},
+      final response = await _sendWithRetry(
+        operation: 'Get users',
+        send: () => http.get(
+          Uri.parse('$apiBaseUrl/users'),
+          headers: {'Content-Type': 'application/json'},
+        ),
       );
 
       if (response.statusCode == 200) {
         final List<dynamic> jsonList = jsonDecode(response.body);
         return jsonList.map((json) => User.fromJson(json)).toList();
       } else {
-        throw Exception('Failed to fetch users');
+        throw Exception(_extractErrorMessage(response.body, 'Failed to fetch users'));
       }
     } catch (e) {
       throw Exception('Get users error: $e');
@@ -116,15 +206,18 @@ class ApiService {
   // Get specific user
   static Future<User> getUserById(int id) async {
     try {
-      final response = await http.get(
-        Uri.parse('$apiBaseUrl/users/$id'),
-        headers: {'Content-Type': 'application/json'},
+      final response = await _sendWithRetry(
+        operation: 'Get user',
+        send: () => http.get(
+          Uri.parse('$apiBaseUrl/users/$id'),
+          headers: {'Content-Type': 'application/json'},
+        ),
       );
 
       if (response.statusCode == 200) {
         return User.fromJson(jsonDecode(response.body));
       } else {
-        throw Exception('User not found');
+        throw Exception(_extractErrorMessage(response.body, 'User not found'));
       }
     } catch (e) {
       throw Exception('Get user error: $e');
@@ -134,16 +227,19 @@ class ApiService {
   // Get contacts for a user
   static Future<List<User>> getContacts(int userId) async {
     try {
-      final response = await http.get(
-        Uri.parse('$apiBaseUrl/contacts/$userId'),
-        headers: {'Content-Type': 'application/json'},
+      final response = await _sendWithRetry(
+        operation: 'Get contacts',
+        send: () => http.get(
+          Uri.parse('$apiBaseUrl/contacts/$userId'),
+          headers: {'Content-Type': 'application/json'},
+        ),
       );
 
       if (response.statusCode == 200) {
         final List<dynamic> jsonList = jsonDecode(response.body);
         return jsonList.map((json) => User.fromJson(json)).toList();
       } else {
-        throw Exception('Failed to fetch contacts');
+        throw Exception(_extractErrorMessage(response.body, 'Failed to fetch contacts'));
       }
     } catch (e) {
       throw Exception('Get contacts error: $e');
@@ -156,21 +252,23 @@ class ApiService {
     required String query,
   }) async {
     try {
-      final response = await http.post(
-        Uri.parse('$apiBaseUrl/contacts'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'userId': userId,
-          'query': query,
-        }),
+      final response = await _sendWithRetry(
+        operation: 'Add contact',
+        send: () => http.post(
+          Uri.parse('$apiBaseUrl/contacts'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'userId': userId,
+            'query': query,
+          }),
+        ),
       );
 
       if (response.statusCode == 200) {
         return User.fromJson(jsonDecode(response.body));
       }
 
-      final message =
-          jsonDecode(response.body)['error'] ?? 'Add contact failed';
+      final message = _extractErrorMessage(response.body, 'Add contact failed');
       throw Exception(message);
     } catch (e) {
       throw Exception('Add contact error: $e');
@@ -183,17 +281,20 @@ class ApiService {
     required String language,
   }) async {
     try {
-      final response = await http.put(
-        Uri.parse('$apiBaseUrl/users/$userId/language'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'language': language}),
+      final response = await _sendWithRetry(
+        operation: 'Update language',
+        send: () => http.put(
+          Uri.parse('$apiBaseUrl/users/$userId/language'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({'language': language}),
+        ),
       );
 
       if (response.statusCode == 200) {
         return User.fromJson(jsonDecode(response.body));
       }
 
-      final message = jsonDecode(response.body)['error'] ?? 'Update failed';
+      final message = _extractErrorMessage(response.body, 'Update failed');
       throw Exception(message);
     } catch (e) {
       throw Exception('Update language error: $e');

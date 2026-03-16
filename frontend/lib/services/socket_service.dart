@@ -22,12 +22,27 @@ class SocketService {
       socketUrl,
       IO.OptionBuilder()
           .setTransports(['websocket'])
+          .enableReconnection()
+          .setReconnectionAttempts(20)
+          .setReconnectionDelay(1000)
+          .setReconnectionDelayMax(5000)
+          .setTimeout(45000)
           .disableAutoConnect()
           .build(),
     );
 
     socket.on('connect', (_) {
       print('Socket connected');
+      if (currentUserId != null) {
+        socket.emit('user_join', currentUserId);
+      }
+    });
+
+    socket.on('reconnect', (_) {
+      print('Socket reconnected');
+      if (currentUserId != null) {
+        socket.emit('user_join', currentUserId);
+      }
     });
 
     socket.on('online_users', (data) {
