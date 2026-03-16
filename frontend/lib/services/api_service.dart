@@ -1,11 +1,19 @@
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'dart:io';
 import 'package:chat_app/models/user.dart';
 import 'package:chat_app/config/app_config.dart';
 
 class ApiService {
   static const String baseUrl = AppConfig.apiBaseUrl;
   static const String apiBaseUrl = '$baseUrl';
+
+  static bool _isTransientNetworkError(Object error) {
+    return error is SocketException ||
+        error is http.ClientException ||
+        error.toString().contains('connection abort') ||
+        error.toString().contains('Connection closed');
+  }
 
   // Register user
   static Future<User> registerUser({
@@ -17,37 +25,48 @@ class ApiService {
     required String? avatarPath,
     String? language,
   }) async {
-    try {
-      var request = http.MultipartRequest(
-        'POST',
-        Uri.parse('$apiBaseUrl/register'),
-      );
+    const maxAttempts = 2;
 
-      request.fields['username'] = username;
-      request.fields['email'] = email;
-      request.fields['password'] = password;
-      if (birthDate != null) request.fields['birthDate'] = birthDate;
-      if (gender != null) request.fields['gender'] = gender;
-      if (language != null) request.fields['language'] = language;
-
-      if (avatarPath != null && avatarPath.isNotEmpty) {
-        request.files.add(
-          await http.MultipartFile.fromPath('avatar', avatarPath),
+    for (var attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        final request = http.MultipartRequest(
+          'POST',
+          Uri.parse('$apiBaseUrl/register'),
         );
-      }
 
-      var response = await request.send();
-      var responseBody = await response.stream.bytesToString();
+        request.fields['username'] = username;
+        request.fields['email'] = email;
+        request.fields['password'] = password;
+        if (birthDate != null) request.fields['birthDate'] = birthDate;
+        if (gender != null) request.fields['gender'] = gender;
+        if (language != null) request.fields['language'] = language;
 
-      if (response.statusCode == 201) {
-        return User.fromJson(jsonDecode(responseBody));
-      } else {
-        throw Exception(
-            jsonDecode(responseBody)['error'] ?? 'Registration failed');
+        if (avatarPath != null && avatarPath.isNotEmpty) {
+          request.files.add(
+            await http.MultipartFile.fromPath('avatar', avatarPath),
+          );
+        }
+
+        final response =
+            await request.send().timeout(const Duration(seconds: 45));
+        final responseBody = await response.stream.bytesToString();
+
+        if (response.statusCode == 201) {
+          return User.fromJson(jsonDecode(responseBody));
+        }
+
+        throw Exception(jsonDecode(responseBody)['error'] ?? 'Registration failed');
+      } catch (e) {
+        final canRetry = attempt < maxAttempts && _isTransientNetworkError(e);
+        if (canRetry) {
+          await Future.delayed(const Duration(milliseconds: 1200));
+          continue;
+        }
+        throw Exception('Registration error: $e');
       }
-    } catch (e) {
-      throw Exception('Registration error: $e');
     }
+
+    throw Exception('Registration failed');
   }
 
   // Login user
