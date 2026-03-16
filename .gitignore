@@ -40,4 +40,5 @@ frontend/macos/Flutter/GeneratedPluginRegistrant.swift
 node_modules/
 .venv/
 uploads/
+chat.db
 .env.local
