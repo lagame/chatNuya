@@ -3,8 +3,38 @@ import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
 import { runAsync, getAsync, allAsync } from './database';
+import {
+  authenticateToken,
+  ensureSelfByBody,
+  ensureSelfByParam,
+  hashPassword,
+  signAuthToken,
+  verifyPassword,
+} from './auth';
 
 const router = Router();
+
+type PublicUser = {
+  id: number;
+  username: string;
+  email: string;
+  birthDate: string | null;
+  gender: string | null;
+  avatarUrl: string | null;
+  language: string | null;
+};
+
+function toPublicUser(user: any): PublicUser {
+  return {
+    id: Number(user.id),
+    username: user.username,
+    email: user.email,
+    birthDate: user.birthDate ?? null,
+    gender: user.gender ?? null,
+    avatarUrl: user.avatarUrl ?? null,
+    language: user.language ?? null,
+  };
+}
 
 // Configure multer for file uploads
 const uploadsDir = process.env.UPLOADS_PATH || './uploads';
@@ -54,6 +84,8 @@ router.post('/register', upload.single('avatar'), async (req: Request, res: Resp
       avatarUrl = `/uploads/${req.file.filename}`;
     }
 
+    const hashedPassword = await hashPassword(String(password));
+
     // Insert user into database
     const result = await runAsync(
       `INSERT INTO users (username, email, password, "birthDate", gender, "avatarUrl", language) 
@@ -61,7 +93,7 @@ router.post('/register', upload.single('avatar'), async (req: Request, res: Resp
       [
         username,
         email,
-        password,
+        hashedPassword,
         birthDate || null,
         gender || null,
         avatarUrl,
@@ -69,7 +101,7 @@ router.post('/register', upload.single('avatar'), async (req: Request, res: Resp
       ]
     );
 
-    res.status(201).json({
+    const user = {
       id: result.id,
       username,
       email,
@@ -77,7 +109,15 @@ router.post('/register', upload.single('avatar'), async (req: Request, res: Resp
       gender: gender || null,
       avatarUrl,
       language: normalizedLanguage || null,
+    };
+
+    const token = signAuthToken({
+      userId: result.id,
+      username,
+      email,
     });
+
+    res.status(201).json({ user, token });
   } catch (error: any) {
     console.error('Register error:', error);
     if (error?.code === '23505') {
@@ -97,17 +137,39 @@ router.post('/login', async (req: Request, res: Response) => {
     }
 
     const user = await getAsync(
-      `SELECT id, username, email, "birthDate", gender, "avatarUrl", language
+      `SELECT id, username, email, password, "birthDate", gender, "avatarUrl", language
        FROM users
-       WHERE (email = ? OR username = ?) AND password = ?`,
-      [identifier, identifier, password]
+       WHERE email = ? OR username = ?`,
+      [identifier, identifier]
     );
 
-    if (!user) {
+    const passwordOk = user
+      ? await verifyPassword(String(password), String(user.password))
+      : false;
+
+    if (!user || !passwordOk) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    res.json(user);
+    // Opportunistic migration for legacy plain-text records.
+    if (
+      typeof user.password === 'string' &&
+      !user.password.startsWith('$2a$') &&
+      !user.password.startsWith('$2b$') &&
+      !user.password.startsWith('$2y$')
+    ) {
+      const upgradedHash = await hashPassword(String(password));
+      await runAsync(`UPDATE users SET password = ? WHERE id = ?`, [upgradedHash, user.id]);
+    }
+
+    const publicUser = toPublicUser(user);
+    const token = signAuthToken({
+      userId: publicUser.id,
+      username: publicUser.username,
+      email: publicUser.email,
+    });
+
+    res.json({ user: publicUser, token });
   } catch (error) {
     console.error('Login error:', error);
     res.status(500).json({ error: 'Login failed' });
@@ -115,7 +177,7 @@ router.post('/login', async (req: Request, res: Response) => {
 });
 
 // GET /users - Get all users
-router.get('/users', async (req: Request, res: Response) => {
+router.get('/users', authenticateToken, async (req: Request, res: Response) => {
   try {
     const users = await allAsync(
       `SELECT id, username, email, "birthDate", gender, "avatarUrl", language FROM users`
@@ -128,7 +190,7 @@ router.get('/users', async (req: Request, res: Response) => {
 });
 
 // GET /users/:id - Get specific user
-router.get('/users/:id', async (req: Request, res: Response) => {
+router.get('/users/:id', authenticateToken, ensureSelfByParam('id'), async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const user = await getAsync(
@@ -148,7 +210,7 @@ router.get('/users/:id', async (req: Request, res: Response) => {
 });
 
 // PUT /users/:id/language - Update user language
-router.put('/users/:id/language', async (req: Request, res: Response) => {
+router.put('/users/:id/language', authenticateToken, ensureSelfByParam('id'), async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { language } = req.body;
@@ -176,7 +238,7 @@ router.put('/users/:id/language', async (req: Request, res: Response) => {
 });
 
 // GET /contacts/:userId - Get contacts for user
-router.get('/contacts/:userId', async (req: Request, res: Response) => {
+router.get('/contacts/:userId', authenticateToken, ensureSelfByParam('userId'), async (req: Request, res: Response) => {
   try {
     const { userId } = req.params;
     const contacts = await allAsync(
@@ -195,7 +257,7 @@ router.get('/contacts/:userId', async (req: Request, res: Response) => {
 });
 
 // POST /contacts - Add contact by username or email
-router.post('/contacts', async (req: Request, res: Response) => {
+router.post('/contacts', authenticateToken, ensureSelfByBody('userId'), async (req: Request, res: Response) => {
   try {
     const { userId, query } = req.body;
 

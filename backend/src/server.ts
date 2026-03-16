@@ -7,6 +7,7 @@ import dotenv from 'dotenv';
 import { initializeDatabase } from './database';
 import routes from './routes';
 import { setupSocket } from './socket';
+import { setupSwagger } from './swagger';
 
 dotenv.config();
 
@@ -32,6 +33,9 @@ app.use('/uploads', express.static(uploadsDir));
 
 // Routes
 app.use('/', routes);
+
+// API docs
+setupSwagger(app);
 
 // Health check
 app.get('/health', (req, res) => {

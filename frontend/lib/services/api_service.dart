@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:chat_app/models/user.dart';
 import 'package:chat_app/config/app_config.dart';
+import 'package:chat_app/services/storage_service.dart';
 
 class ApiService {
   static const String baseUrl = AppConfig.apiBaseUrl;
@@ -31,6 +32,17 @@ class ApiService {
   static Duration _retryDelay(int attempt) {
     // Small exponential backoff to absorb Render wake-up latency.
     return Duration(milliseconds: 1200 * attempt);
+  }
+
+  static Future<Map<String, String>> _authJsonHeaders() async {
+    final token = await StorageService.getToken();
+    final headers = <String, String>{
+      'Content-Type': 'application/json',
+    };
+    if (token != null && token.isNotEmpty) {
+      headers['Authorization'] = 'Bearer $token';
+    }
+    return headers;
   }
 
   static String _extractErrorMessage(String body, String fallback) {
@@ -144,7 +156,15 @@ class ApiService {
       );
 
       if (result.statusCode == 201) {
-        return User.fromJson(jsonDecode(result.body));
+        final decoded = jsonDecode(result.body) as Map<String, dynamic>;
+        final token = decoded['token'] as String?;
+        final userJson = decoded['user'] as Map<String, dynamic>? ?? decoded;
+
+        if (token != null && token.isNotEmpty) {
+          await StorageService.saveToken(token);
+        }
+
+        return User.fromJson(userJson);
       }
 
       throw Exception(_extractErrorMessage(result.body, 'Registration failed'));
@@ -159,11 +179,12 @@ class ApiService {
     required String password,
   }) async {
     try {
+      final headers = await _authJsonHeaders();
       final response = await _sendWithRetry(
         operation: 'Login',
         send: () => http.post(
           Uri.parse('$apiBaseUrl/login'),
-          headers: {'Content-Type': 'application/json'},
+          headers: headers,
           body: jsonEncode({
             'identifier': identifier,
             'password': password,
@@ -172,7 +193,15 @@ class ApiService {
       );
 
       if (response.statusCode == 200) {
-        return User.fromJson(jsonDecode(response.body));
+        final decoded = jsonDecode(response.body) as Map<String, dynamic>;
+        final token = decoded['token'] as String?;
+        final userJson = decoded['user'] as Map<String, dynamic>? ?? decoded;
+
+        if (token != null && token.isNotEmpty) {
+          await StorageService.saveToken(token);
+        }
+
+        return User.fromJson(userJson);
       } else {
         throw Exception(_extractErrorMessage(response.body, 'Login failed'));
       }
@@ -184,11 +213,12 @@ class ApiService {
   // Get all users
   static Future<List<User>> getAllUsers() async {
     try {
+      final headers = await _authJsonHeaders();
       final response = await _sendWithRetry(
         operation: 'Get users',
         send: () => http.get(
           Uri.parse('$apiBaseUrl/users'),
-          headers: {'Content-Type': 'application/json'},
+          headers: headers,
         ),
       );
 
@@ -206,11 +236,12 @@ class ApiService {
   // Get specific user
   static Future<User> getUserById(int id) async {
     try {
+      final headers = await _authJsonHeaders();
       final response = await _sendWithRetry(
         operation: 'Get user',
         send: () => http.get(
           Uri.parse('$apiBaseUrl/users/$id'),
-          headers: {'Content-Type': 'application/json'},
+          headers: headers,
         ),
       );
 
@@ -227,11 +258,12 @@ class ApiService {
   // Get contacts for a user
   static Future<List<User>> getContacts(int userId) async {
     try {
+      final headers = await _authJsonHeaders();
       final response = await _sendWithRetry(
         operation: 'Get contacts',
         send: () => http.get(
           Uri.parse('$apiBaseUrl/contacts/$userId'),
-          headers: {'Content-Type': 'application/json'},
+          headers: headers,
         ),
       );
 
@@ -252,11 +284,12 @@ class ApiService {
     required String query,
   }) async {
     try {
+      final headers = await _authJsonHeaders();
       final response = await _sendWithRetry(
         operation: 'Add contact',
         send: () => http.post(
           Uri.parse('$apiBaseUrl/contacts'),
-          headers: {'Content-Type': 'application/json'},
+          headers: headers,
           body: jsonEncode({
             'userId': userId,
             'query': query,
@@ -281,11 +314,12 @@ class ApiService {
     required String language,
   }) async {
     try {
+      final headers = await _authJsonHeaders();
       final response = await _sendWithRetry(
         operation: 'Update language',
         send: () => http.put(
           Uri.parse('$apiBaseUrl/users/$userId/language'),
-          headers: {'Content-Type': 'application/json'},
+          headers: headers,
           body: jsonEncode({'language': language}),
         ),
       );
