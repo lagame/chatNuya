@@ -31,12 +31,12 @@ jobs:
         working-directory: frontend
         run: flutter pub get
 
-      - name: Build release APK
+      - name: Build release APKs (split per ABI)
         working-directory: frontend
-        run: flutter build apk --release
+        run: flutter build apk --release --split-per-abi
 
-      - name: Upload APK artifact
+      - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
         with:
           name: nuya-android-apk
-          path: frontend/build/app/outputs/flutter-apk/app-release.apk
+          path: frontend/build/app/outputs/flutter-apk/app-*-release.apk
