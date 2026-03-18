@@ -21,6 +21,10 @@ export function signAuthToken(payload: AuthPayload): string {
   } as jwt.SignOptions);
 }
 
+export function verifyAuthToken(token: string): AuthPayload {
+  return jwt.verify(token, JWT_SECRET) as AuthPayload;
+}
+
 export async function hashPassword(password: string): Promise<string> {
   const salt = await bcrypt.genSalt(10);
   return bcrypt.hash(password, salt);

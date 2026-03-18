@@ -1,6 +1,7 @@
 import 'package:socket_io_client/socket_io_client.dart' as IO;
 import 'package:chat_app/models/message.dart';
 import 'package:chat_app/config/app_config.dart';
+import 'package:chat_app/services/storage_service.dart';
 
 class SocketService {
   static const String socketUrl = AppConfig.socketUrl;
@@ -87,7 +88,18 @@ class SocketService {
     });
   }
 
-  void connect() {
+  Future<void> connect() async {
+    final token = await StorageService.getToken();
+    if (token == null || token.isEmpty) {
+      print('Socket connect skipped: missing auth token');
+      return;
+    }
+
+    final options = socket.io.options ?? <String, dynamic>{};
+    options['auth'] = {'token': token};
+    options['extraHeaders'] = {'Authorization': 'Bearer $token'};
+    socket.io.options = options;
+
     if (!socket.connected) {
       socket.connect();
     }

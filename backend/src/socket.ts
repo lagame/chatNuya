@@ -1,17 +1,68 @@
 import { Server as SocketIOServer, Socket } from 'socket.io';
 import { runAsync, getAsync, allAsync } from './database';
+import { AuthPayload, verifyAuthToken } from './auth';
 
 // Store online users
 const onlineUsers = new Map<number, string>();
 
+type AuthenticatedSocket = Socket & {
+  data: {
+    auth?: AuthPayload;
+  };
+};
+
+function extractToken(socket: Socket): string | null {
+  const authToken = socket.handshake.auth?.token;
+  if (typeof authToken === 'string' && authToken.length > 0) {
+    return authToken;
+  }
+
+  const headerToken = socket.handshake.headers.authorization;
+  if (typeof headerToken === 'string' && headerToken.startsWith('Bearer ')) {
+    return headerToken.slice(7);
+  }
+
+  return null;
+}
+
 export function setupSocket(io: SocketIOServer) {
+  io.use((socket, next) => {
+    try {
+      const token = extractToken(socket);
+      if (!token) {
+        return next(new Error('Unauthorized'));
+      }
+
+      const auth = verifyAuthToken(token);
+      (socket as AuthenticatedSocket).data.auth = auth;
+      return next();
+    } catch (_error) {
+      return next(new Error('Unauthorized'));
+    }
+  });
+
   io.on('connection', (socket: Socket) => {
     console.log('User connected:', socket.id);
+    const authSocket = socket as AuthenticatedSocket;
+    const authUserId = authSocket.data.auth?.userId;
+    if (!authUserId) {
+      socket.disconnect(true);
+      return;
+    }
+
+    onlineUsers.set(authUserId, socket.id);
+    io.emit('online_users', Array.from(onlineUsers.keys()));
 
     // User joins with their ID
     socket.on('user_join', (userId: number) => {
-      onlineUsers.set(userId, socket.id);
-      console.log(`User ${userId} joined. Online users:`, Array.from(onlineUsers.keys()));
+      const safeUserId = authUserId;
+      if (Number(userId) !== safeUserId) {
+        socket.emit('message_error', { error: 'Forbidden' });
+        return;
+      }
+
+      onlineUsers.set(safeUserId, socket.id);
+      console.log(`User ${safeUserId} joined. Online users:`, Array.from(onlineUsers.keys()));
       
       // Broadcast online users list
       io.emit('online_users', Array.from(onlineUsers.keys()));
@@ -20,7 +71,13 @@ export function setupSocket(io: SocketIOServer) {
     // Send message
     socket.on('send_message', async (data: { senderId: number; receiverId: number; content: string }) => {
       try {
-        const { senderId, receiverId, content } = data;
+        const { receiverId, content } = data;
+        const senderId = authUserId;
+
+        if (!receiverId || !content || !String(content).trim()) {
+          socket.emit('message_error', { error: 'Invalid message' });
+          return;
+        }
 
         // Save message to database
         await runAsync(
@@ -57,11 +114,18 @@ export function setupSocket(io: SocketIOServer) {
     // Get message history
     socket.on('get_messages', async (data: { userId1: number; userId2: number }, callback: Function) => {
       try {
+        const requestedA = Number(data.userId1);
+        const requestedB = Number(data.userId2);
+        if (requestedA !== authUserId && requestedB !== authUserId) {
+          callback([]);
+          return;
+        }
+
         const messages = await allAsync(
           `SELECT * FROM messages 
            WHERE ("senderId" = ? AND "receiverId" = ?) OR ("senderId" = ? AND "receiverId" = ?)
            ORDER BY "createdAt" ASC`,
-          [data.userId1, data.userId2, data.userId2, data.userId1]
+          [requestedA, requestedB, requestedB, requestedA]
         );
         callback(messages);
       } catch (error) {
@@ -72,30 +136,38 @@ export function setupSocket(io: SocketIOServer) {
 
     // User typing indicator
     socket.on('typing', (data: { senderId: number; receiverId: number }) => {
+      if (Number(data.senderId) !== authUserId) {
+        socket.emit('message_error', { error: 'Forbidden' });
+        return;
+      }
+
       const receiverSocketId = onlineUsers.get(data.receiverId);
       if (receiverSocketId) {
-        io.to(receiverSocketId).emit('user_typing', { senderId: data.senderId });
+        io.to(receiverSocketId).emit('user_typing', { senderId: authUserId });
       }
     });
 
     // User stopped typing
     socket.on('stop_typing', (data: { senderId: number; receiverId: number }) => {
+      if (Number(data.senderId) !== authUserId) {
+        socket.emit('message_error', { error: 'Forbidden' });
+        return;
+      }
+
       const receiverSocketId = onlineUsers.get(data.receiverId);
       if (receiverSocketId) {
-        io.to(receiverSocketId).emit('user_stop_typing', { senderId: data.senderId });
+        io.to(receiverSocketId).emit('user_stop_typing', { senderId: authUserId });
       }
     });
 
     // User disconnects
     socket.on('disconnect', () => {
       // Find and remove user from online list
-      for (const [userId, socketId] of onlineUsers.entries()) {
-        if (socketId === socket.id) {
-          onlineUsers.delete(userId);
-          console.log(`User ${userId} disconnected. Online users:`, Array.from(onlineUsers.keys()));
-          io.emit('online_users', Array.from(onlineUsers.keys()));
-          break;
-        }
+      const mappedSocket = onlineUsers.get(authUserId);
+      if (mappedSocket === socket.id) {
+        onlineUsers.delete(authUserId);
+        console.log(`User ${authUserId} disconnected. Online users:`, Array.from(onlineUsers.keys()));
+        io.emit('online_users', Array.from(onlineUsers.keys()));
       }
     });
   });
